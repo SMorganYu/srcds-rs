@@ -11,7 +11,12 @@ pub mod bitbuf;
 pub mod bytes;
 pub mod connectionless;
 pub mod error;
+pub mod handshake;
+pub mod lzss;
+pub mod netchan;
+pub mod netmsg;
 pub mod split;
+pub mod stringtable;
 
 pub use error::ProtocolError;
 

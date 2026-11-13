@@ -323,6 +323,44 @@ impl BitWriter {
         Ok(())
     }
 
+    /// Appends the first `nbits` bits of `src` (LSB-first, as produced by another
+    /// writer or read from the wire).
+    pub fn append_bits(&mut self, src: &[u8], nbits: usize) -> Result<()> {
+        if nbits > src.len() * 8 {
+            return Err(ProtocolError::Truncated {
+                needed: nbits.div_ceil(8),
+                remaining: src.len(),
+            });
+        }
+        let full = nbits / 8;
+        if self.bits % 8 == 0 {
+            self.reserve(full * 8)?;
+            let start = self.bits / 8;
+            self.buf[start..start + full].copy_from_slice(&src[..full]);
+            self.bits += full * 8;
+        } else {
+            for &b in &src[..full] {
+                self.write_u8(b)?;
+            }
+        }
+        let rest = (nbits % 8) as u32;
+        if rest > 0 {
+            let last = src[full] & ((1u8 << rest) - 1);
+            self.write_ubits(last as u32, rest)?;
+        }
+        Ok(())
+    }
+
+    /// Appends everything written to `other`.
+    pub fn append(&mut self, other: &BitWriter) -> Result<()> {
+        self.append_bits(&other.buf, other.bits)
+    }
+
+    /// Bits needed to reach the next byte boundary (0..=7).
+    pub fn bits_to_byte_boundary(&self) -> u32 {
+        ((8 - (self.bits % 8)) % 8) as u32
+    }
+
     pub fn write_string(&mut self, s: &str) -> Result<()> {
         if s.as_bytes().contains(&0) {
             return Err(ProtocolError::InvalidField {

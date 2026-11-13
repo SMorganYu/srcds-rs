@@ -11,8 +11,10 @@ srcds-rs 0.1.0 (loopback). Инструмент: `packet-diff`.
 | A2S_PLAYER (пусто) | Implemented, Tested; **побайтово** совпадает с эталоном |
 | A2S_RULES + split | Implemented, Tested; энкодер/сплиттер побайтово воспроизводят эталон на его данных |
 | Проверка стандартным клиентом запросов (браузер серверов GMod) | **Not verified** |
-| Handshake клиента (M2) | Not implemented |
-| Загрузка карты, сущности, игроки, Lua | Not implemented |
+| Handshake клиента (M2) | **Verified with original client**: challenge → connect → `Connected to …` → ServerInfo принят (баннер в консоли), затем чистый `net_Disconnect` с объяснением |
+| Netchannel (seq/ack/checksum/16 подканалов/фрагменты/LZSS/split) | Implemented, unit + e2e тесты |
+| String tables (формат GMod) | Implemented; `downloadables` побитово = эталону; полный signon за флагом `--experimental-signon` (неполный) |
+| Загрузка карты, datatables/baselines, сущности, Lua | Not implemented (клиент с полным набором таблиц падает на стадии таблиц/данных классов — поэтому по умолчанию выключено) |
 
 ## Намеренные отличия A2S_INFO (честные значения)
 
@@ -29,5 +31,6 @@ srcds-rs 0.1.0 (loopback). Инструмент: `packet-diff`.
 * Эталон не отвечает на A2S с 127.0.0.1 (см. `RESEARCH.md`). srcds-rs отвечает — это
   отличие поведения, сознательно оставлено для тестируемости; может быть сделано
   настраиваемым, если выяснится, что клиент на это опирается.
-* Клиент — build 261112, эталонный DS — 261104 (одинаковый PatchVersion). Влияние на
-  подключение не проверено.
+* Клиент — build 261112, эталонный DS — 261104: [факт] клиент подключается к эталону и
+  загружает gm_construct, т.е. несовпадение сборок соединению не мешает.
+* [факт] Клиент не шлёт пакеты на 127.0.0.1 — тестировать с LAN-адресом хоста.

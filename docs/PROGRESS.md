@@ -9,15 +9,18 @@
 - M0: исполняемый `srcds-rs` (CLI, tracing, UDP, тик-цикл 66.67 Гц, метрики, Ctrl+C, `quit`).
 - M1 (протокол): challenge, A2S_INFO/PLAYER/RULES, split; rate limiting.
 
+- M2: handshake + netchannel + начало signon; **оригинальный клиент GMod подключается**
+  (`Connected to 192.168.0.174:…`, ServerInfo принят, чистый disconnect с причиной).
+
 ## In progress
-- Исследование M2 (handshake клиента).
+- M3: полный signon (string tables с данными, datatables/baselines, сущности).
 
 ## Verified tests
-- 49 тестов (unit, golden против эталона, интеграционные с реальным процессом) — `TEST_RESULTS.md`.
+- 77 тестов (unit, golden против эталона, интеграционные с реальным процессом, e2e handshake) — `TEST_RESULTS.md`.
 - Энкодер побайтово воспроизводит эталонные INFO/PLAYER/RULES/split.
 
 ## Known limitations
-- Нет handshake/netchannel; игровые клиенты не могут подключиться.
+- Клиент подключается, но в карту не входит: нет datatables/baselines/сущностей/GLua.
 - `game`/`keywords`/rules отражают реальное (минимальное) состояние, а не Sandbox.
 - Нет Steam GameServer интеграции (нет SteamID в A2S_INFO).
 - Не проверено браузером серверов оригинального клиента.
@@ -30,6 +33,9 @@
 - Rules упорядочены по ASCII-uppercase имени; split по 1248 байт.
 - Клиент (261112) и эталонный DS (261104) — разные сборки при одном PatchVersion.
 - engine.dll содержит GMod-сообщения `clc_GMod_ClientToServer` / `svc_GMod_ServerToClient`.
+
+- [факт] Клиент GMod не шлёт пакеты на 127.0.0.1.
+- [факт] GMod netchannel: 16 подканалов, фрагмент 4096, MAX_FILE_SIZE_BITS 30, userdata 19 бит.
 
 ## Next tasks
 - См. `ROADMAP.md` §«Ближайшие задачи».

@@ -36,3 +36,30 @@ cargo test --workspace                                      # 49 passed, 0 faile
 * Браузер серверов клиента GMod против srcds-rs.
 * Linux-сборка (WSL доступен, не запускался).
 * Ctrl+C на Windows (проверен только `quit` через stdin).
+
+## 2026-11-14 — M2 (handshake, netchannel)
+
+```
+cargo fmt --all -- --check                                  # OK
+cargo clippy --workspace --all-targets -- -D warnings       # OK
+cargo test --workspace                                      # 77 passed, 0 failed
+```
+
+Новые наборы: `srcds-protocol` (+22: LZSS, handshake-векторы из захвата, netchannel —
+checksum эталонного keep-alive, reliable single/fragmented с потерей и повтором,
+порядок батчей, враждебные размеры; net-сообщения; string tables — `downloadables`
+равен эталону по длине 335 бит), `srcds-core` (+5: BSP MD5/модели/skyname, signon) и
+**e2e `tests/connect.rs`**: UDP-handshake + netchannel против реального `Server` на
+синтетической карте → `svc_ServerInfo` и чистый `net_Disconnect`.
+
+### Живой тест с оригинальным клиентом (не изменялся)
+
+* srcds-rs: `--ip 192.168.0.174 --port 27215 --game-dir <копия garrysmod>`; клиент:
+  `gmod.exe -hijack +connect 192.168.0.174:27017` (relay → 27215).
+* Результат: `Connecting to …` → `Connected to 192.168.0.174:27017` → баннер srcds-rs
+  (svc_Print) → ServerInfo принят (MD5 карты совпал) → `Disconnect: srcds-rs: connected,
+  server info received. Full signon … is not implemented yet` → клиент жив, без краша.
+* С `--experimental-signon` (полный набор таблиц) клиент падает до `SignonState(3)`;
+  с 0 таблиц — чистая ошибка `Host_Error: Invalid download file table`. Поэтому по
+  умолчанию полный signon выключен (не слать клиенту данные, которые он не может
+  обработать).

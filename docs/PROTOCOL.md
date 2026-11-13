@@ -66,6 +66,86 @@ srcds-rs игнорирует [D].
 |---|---|
 | `A2A_PING` (`'i'`) | Valve объявила устаревшим; не отвечаем [?] |
 | `A2S_SERVERQUERY_GETCHALLENGE` (`'W'`) | строка есть в engine.dll; srcds-rs отвечает challenge [D] |
-| `A2S_GETCHALLENGE` (`'q'`), `C2S_CONNECT` (`'k'`) | handshake клиента — M2, формат GMod **не подтверждён**; srcds-rs пока считает как `unhandled` |
-| Netchannel, сообщения `net_*`/`clc_*`/`svc_*` | имена найдены в engine.dll (см. `IDA_FINDINGS.md`), форматы не исследованы |
+| `A2S_GETCHALLENGE`/`C2S_CONNECT`, netchannel | **реализованы**, см. разделы ниже |
 | bzip2-сжатые split-пакеты | отвергаются |
+
+# Handshake и netchannel (M2) — 2026-11-14
+
+Источник: захват оригинального клиента GMod (build 261112) ↔ копия эталонного DS
+(261104) через собственный UDP-relay (`scripts/udp_relay.py`, LAN-IP), разбор
+`scripts/netchan_decode.py`. Структуры сверены с публичной нумерацией сообщений Source
+(Obsoletium используется только как справочник по полям, код не копируется). Метки:
+**[факт]** — подтверждено захватом/тестом; **[гипотеза]** — смысл поля не установлен.
+
+## Loopback
+
+* [факт] Клиент GMod **не отправляет** ни одного пакета на `127.0.0.1:<port>`
+  («Connection failed after 6 retries», relay на loopback пакетов не видит; ручной пакет
+  через тот же relay проходит). Вместе с тем, что DS не отвечает на A2S с 127.0.0.1,
+  для тестов используется LAN-адрес хоста.
+
+## Connectionless handshake
+
+| Шаг | Формат (после `FF FF FF FF`) | Статус |
+|---|---|---|
+| `A2S_GETCHALLENGE` | `'q' u32 client_challenge "0000000000\0"` | [факт] |
+| `S2C_CHALLENGE` | `'A' u32 0x5A4F4933 u32 server_ch u32 client_ch i32 auth=3 u16 0 u64 server_steamid u8 secure "000000\0"` (39 байт) | [факт]; эталон без Steam-логина шлёт steamid=1 |
+| `C2S_CONNECT` | `'k' i32 protocol=24 i32 auth=3 u32 server_ch u32 client_ch u32 gmod_extra str name str password str version u16 len + steam cookie` | [факт]; `gmod_extra` — [гипотеза] смысл неизвестен |
+| `S2C_CONNECTION` | `'B' u32 client_ch "0000000000\0"` | [факт] |
+| `S2C_CONNREJECT` | `'9' u32 client_ch str reason` | формат классический; используется для честных отказов |
+
+Steam cookie (SteamID + тикет сессии) — учётные данные клиента: srcds-rs его **не
+логирует и не сохраняет** (только длину), тикет **не проверяет** — сервер работает
+как `sv_lan 1` и принимает только loopback/частные адреса.
+
+## Заголовок netchannel
+
+`i32 seq | i32 ack | u8 flags | u16 checksum | u16 rel_state | [u8 choked] | [u32 challenge] | биты…`
+
+* [факт] checksum = CRC32 всех байт после поля checksum, свёрнутый `lo16 ^ hi16`
+  (сошлось на 303 пакетах эталона).
+* [факт] **GMod: 16 reliable-подканалов** — `rel_state` 16 бит, индекс подканала 4 бита
+  (классический Source: 8 / 3).
+* [факт] challenge = серверный challenge из `S2C_CHALLENGE`, присутствует всегда.
+* [факт] Хвост: биты добиваются единицами до байта, число добивки ORится в биты 5..7
+  flags (пересекается с флагом CHALLENGE). srcds-rs гарантирует ≥ 6 нулевых бит (NOP)
+  после последнего сообщения, поэтому любая интерпретация добивки безопасна.
+* `-2` — split (формат как у A2S), `-3` — `"LZSS"` + u32 размер + поток LZSS
+  (клиент шлёт сжатые пакеты; srcds-rs распаковывает с лимитом).
+
+## Reliable-фрагменты (GMod)
+
+* [факт] `MAX_FILE_SIZE_BITS = 30`, фрагмент **4096 байт**, счётчик фрагментов **5 бит**,
+  старт фрагмента 18 бит (найдено подбором: поле несжатого размера = размеру в
+  заголовке LZSS).
+* single-block: `0 | compressed:1 [size:30] | varint bytes`.
+* Подтверждение: отправитель переворачивает бит *i* при отправке подканала *i*;
+  получатель переворачивает свой бит после полного чтения и эхо-шлёт состояние.
+  Совпадение битов = ACK; если пир подтвердил более поздний seq без совпадения — повтор.
+
+## Сообщения (тип 6 бит) — отличия GMod
+
+| Сообщение | Отличие | Статус |
+|---|---|---|
+| `svc_ServerInfo` (8) | после hostname ещё две строки: `""` и имя gamemode (`sandbox`) | [факт] длина 752 бит совпадает; смысл первой строки — [гипотеза] |
+| `svc_CreateStringTable` (12) | вместо u16 max: `log2(max)` в **5 битах**, затем entries в `log2+1` бит, varint длина | [факт] все 19 таблиц эталона сходятся по границам; `downloadables` srcds-rs **побитово равен** эталону (335 бит) |
+| user data в таблицах | длина **19 бит** (классика 14) | [факт] |
+| `player_info` (`userinfo`) | 324 байта: name[128], userID, guid[33], friendsID, friendsName[128], fake, hltv, customFiles[4], downloaded | [факт] |
+| `net_File` (2) | `u32 id`, 2 флага, CRC32 вместо имени для user_custom | [факт] раскладка, смысл флагов — [гипотеза] |
+| `svc_ClassInfo` (10) | эталон: 250 классов, `create_on_client=1`, SendTables не шлются | [факт] |
+| `clc` 18 | `clc_GMod_ClientToServer`: u20 длина в битах + данные | [факт] |
+| `svc` 33 | `svc_GMod_ServerToClient`: u20 длина + данные; в signon один байт `0x03` | [факт] формат, [гипотеза] смысл |
+| `client_lua_files` | entry 0 `paths`; файлы с SHA-256(содержимое + NUL) | [факт] хэш проверен |
+| MD5 карты в ServerInfo | MD5 всех lump'ов кроме entities | [факт] gm_construct → `3b5c56cf…` |
+
+## Последовательность signon эталона
+
+1. C: `SetConVar` + `SignonState(2)`.
+2. S: `Print` + `ServerInfo`; затем `Tick`, 19 `CreateStringTable`, ~28
+   `UpdateStringTable(instancebaseline)`, `svc 33`, `SetConVar`, `SignonState(3)`.
+3. C: `ClientInfo` + `clc 18` + `SignonState(3)`.
+4. S: `net_File` (запрос спрея), `ClassInfo(250, create)`, `BSPDecal`×19, `VoiceInit`,
+   `GameEventList(84)`, `SignonState(4)`.
+5. C: `SignonState(4)` + `ListenEvents` (+ загрузка спрея в file-stream).
+6. S: `SetView`, `Tick`, `SignonState(5)`; C: `SignonState(5)`.
+7. S: UserMessage'ы, `userinfo`, первый `PacketEntities` (70 сущностей), `FixAngle`.

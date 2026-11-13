@@ -1,4 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Static server configuration (from CLI today; config files later).
@@ -26,6 +27,15 @@ pub struct ServerConfig {
     /// Global connectionless-response budget (packets/s) and per-IP budget.
     pub query_rate_global: u32,
     pub query_rate_per_ip: u32,
+    /// Path to the `garrysmod` content directory (maps are read from `maps/`).
+    /// Without it, game clients are refused with an explanatory message.
+    pub game_dir: Option<PathBuf>,
+    /// Gamemode name announced to clients.
+    pub gamemode: String,
+    /// Attempt the experimental, incomplete world signon (string tables and beyond)
+    /// after ServerInfo. Off by default: that path is unfinished and can disrupt the
+    /// game client, so the default sends ServerInfo then a clean disconnect.
+    pub experimental_full_signon: bool,
 }
 
 impl Default for ServerConfig {
@@ -47,6 +57,9 @@ impl Default for ServerConfig {
             metrics_log_interval: Some(Duration::from_secs(60)),
             query_rate_global: 2000,
             query_rate_per_ip: 30,
+            game_dir: None,
+            gamemode: "sandbox".into(),
+            experimental_full_signon: false,
         }
     }
 }

@@ -43,6 +43,10 @@ struct Args {
     /// Seconds between metrics log lines (0 disables).
     #[arg(long, default_value_t = 60)]
     metrics_interval: u64,
+    /// Attempt the experimental, incomplete world signon after ServerInfo (string
+    /// tables and beyond). Off by default; the unfinished path can disrupt the client.
+    #[arg(long)]
+    experimental_signon: bool,
 }
 
 fn main() -> ExitCode {
@@ -72,8 +76,10 @@ fn main() -> ExitCode {
         tick_interval: Duration::from_secs_f64(1.0 / args.tickrate),
         metrics_log_interval: (args.metrics_interval > 0)
             .then(|| Duration::from_secs(args.metrics_interval)),
+        experimental_full_signon: args.experimental_signon,
         ..ServerConfig::default()
     };
+    cfg.game_dir = args.game_dir.clone();
     if let Some(dir) = &args.game_dir {
         match std::fs::read_to_string(dir.join("steam.inf")) {
             Ok(text) => {
@@ -111,7 +117,7 @@ fn main() -> ExitCode {
         map = %cfg.map,
         max_players = cfg.max_players,
         version = %cfg.version,
-        "srcds-rs listening (query protocol only; game connections not implemented)"
+        "srcds-rs listening"
     );
     match server.run() {
         Ok(_) => {
