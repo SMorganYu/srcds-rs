@@ -1,0 +1,13 @@
+[package]
+name = "srcds-protocol"
+description = "Source engine wire formats: byte/bit buffers, connectionless (A2S) messages, split packets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

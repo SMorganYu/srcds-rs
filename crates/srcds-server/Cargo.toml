@@ -1,0 +1,25 @@
+[package]
+name = "srcds-server"
+description = "srcds-rs dedicated server executable"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "srcds-rs"
+path = "src/main.rs"
+
+[dependencies]
+srcds-core.workspace = true
+srcds-protocol.workspace = true
+clap.workspace = true
+ctrlc.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+srcds-protocol.workspace = true
+
+[lints]
+workspace = true
