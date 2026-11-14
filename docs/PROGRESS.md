@@ -12,15 +12,17 @@
 - M2: handshake + netchannel + начало signon; **оригинальный клиент GMod подключается**
   (`Connected to 192.168.0.174:…`, ServerInfo принят, чистый disconnect с причиной).
 
+- M3: **оригинальный клиент входит в карту** (SignonState FULL, gm_construct, без краша).
+
 ## In progress
-- M3: полный signon (string tables с данными, datatables/baselines, сущности).
+- M4: datatables/baseline'ы, сущности, рабочий GLua-геймод (сейчас Lua на клиенте падает).
 
 ## Verified tests
 - 77 тестов (unit, golden против эталона, интеграционные с реальным процессом, e2e handshake) — `TEST_RESULTS.md`.
 - Энкодер побайтово воспроизводит эталонные INFO/PLAYER/RULES/split.
 
 ## Known limitations
-- Клиент подключается, но в карту не входит: нет datatables/baselines/сущностей/GLua.
+- Клиент входит в карту, но геймод не работает: нет datatables/сущностей/GLua (ошибки Lua на клиенте).
 - `game`/`keywords`/rules отражают реальное (минимальное) состояние, а не Sandbox.
 - Нет Steam GameServer интеграции (нет SteamID в A2S_INFO).
 - Не проверено браузером серверов оригинального клиента.
@@ -36,6 +38,7 @@
 
 - [факт] Клиент GMod не шлёт пакеты на 127.0.0.1.
 - [факт] GMod netchannel: 16 подканалов, фрагмент 4096, MAX_FILE_SIZE_BITS 30, userdata 19 бит.
+- [факт] svc_ServerInfo GMod: после gamemode ещё ≥11 бит хвоста (иначе клиент бросает signon).
 
 ## Next tasks
 - См. `ROADMAP.md` §«Ближайшие задачи».

@@ -245,7 +245,10 @@ pub fn tables_batch(g: &GameInfo, tick: i32, players: &[(u8, Vec<u8>)]) -> Resul
     }
     // GMod message 33 with a single byte 0x03 precedes the convars in the reference
     // signon (meaning not established; reproduced as an observed protocol step).
-    netmsg::write_gmod_server_to_client(&mut w, &[3], 8)?;
+    // Diagnostic: SRCDS_RS_SKIP_GMOD33=1 omits it (bisection of signon failures).
+    if std::env::var_os("SRCDS_RS_SKIP_GMOD33").is_none() {
+        netmsg::write_gmod_server_to_client(&mut w, &[3], 8)?;
+    }
     netmsg::write_set_convars(
         &mut w,
         &[

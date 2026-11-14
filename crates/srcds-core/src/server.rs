@@ -81,8 +81,8 @@ impl Server {
                         tick_interval: cfg.tick_interval.as_secs_f32(),
                         server_count: 1,
                         query_port: cfg.port,
-                        client_lua_files: Vec::new(),
-                        full_signon: cfg.experimental_full_signon,
+                        client_lua_files: load_client_lua(dir, cfg.client_lua_manifest.as_deref()),
+                        full_signon: cfg.full_signon,
                     })
                 }
                 Err(e) => {
@@ -393,4 +393,48 @@ impl Server {
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Reads the client Lua manifest and hashes each listed file the way the client
+/// expects (SHA-256 of the content followed by a NUL byte). Missing or unsafe paths
+/// are skipped with a warning.
+fn load_client_lua(
+    game_dir: &std::path::Path,
+    manifest: Option<&std::path::Path>,
+) -> Vec<(String, [u8; 32])> {
+    use sha2::{Digest, Sha256};
+    let Some(manifest) = manifest else {
+        return Vec::new();
+    };
+    let text = match std::fs::read_to_string(manifest) {
+        Ok(t) => t,
+        Err(e) => {
+            warn!(path = %manifest.display(), error = %e, "could not read client Lua manifest");
+            return Vec::new();
+        }
+    };
+    let mut out = Vec::new();
+    for line in text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
+        let rel = line.replace('\\', "/");
+        if rel.starts_with('/')
+            || rel.split('/').any(|c| c == ".." || c.is_empty())
+            || !rel.ends_with(".lua")
+        {
+            warn!(path = %rel, "skipping unsafe client Lua path");
+            continue;
+        }
+        match std::fs::read(game_dir.join(&rel)) {
+            Ok(mut data) => {
+                data.push(0);
+                out.push((rel, Sha256::digest(&data).into()));
+            }
+            Err(e) => warn!(path = %rel, error = %e, "client Lua file not found; skipped"),
+        }
+    }
+    info!(files = out.len(), "client Lua manifest loaded");
+    out
 }

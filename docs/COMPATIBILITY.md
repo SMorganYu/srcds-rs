@@ -13,8 +13,9 @@ srcds-rs 0.1.0 (loopback). Инструмент: `packet-diff`.
 | Проверка стандартным клиентом запросов (браузер серверов GMod) | **Not verified** |
 | Handshake клиента (M2) | **Verified with original client**: challenge → connect → `Connected to …` → ServerInfo принят (баннер в консоли), затем чистый `net_Disconnect` с объяснением |
 | Netchannel (seq/ack/checksum/16 подканалов/фрагменты/LZSS/split) | Implemented, unit + e2e тесты |
-| String tables (формат GMod) | Implemented; `downloadables` побитово = эталону; полный signon за флагом `--experimental-signon` (неполный) |
-| Загрузка карты, datatables/baselines, сущности, Lua | Not implemented (клиент с полным набором таблиц падает на стадии таблиц/данных классов — поэтому по умолчанию выключено) |
+| **Полный signon → вход в карту** | **Verified**: оригинальный клиент доходит до SignonState(FULL), грузит gm_construct, держится стабильно. Включён по умолчанию; `--minimal-signon` — только ServerInfo + чистый disconnect |
+| String tables (формат GMod) | Implemented; `downloadables` побитово = эталону; полный набор отдаётся в signon |
+| Datatables/baselines, сущности, GLua-геймод | Not implemented: клиент входит в карту, но клиентский Lua падает (нет includes/derma/Color), сущности не передаются. Игрок подключён, но геймод не функционирует |
 
 ## Намеренные отличия A2S_INFO (честные значения)
 

@@ -63,3 +63,29 @@ checksum эталонного keep-alive, reliable single/fragmented с поте
   с 0 таблиц — чистая ошибка `Host_Error: Invalid download file table`. Поэтому по
   умолчанию полный signon выключен (не слать клиенту данные, которые он не может
   обработать).
+
+## 2026-11-14 — M3 (вход клиента в карту)
+
+```
+cargo fmt / clippy -D warnings / test --workspace     # 78 passed, 0 failed
+```
+
+Найден блокер M2→M3: `svc_ServerInfo` у GMod имеет хвост после строки gamemode —
+клиент доходит до SignonState(FULL) только если присутствует ≥ 11 доп. бит (бисекция
+живым клиентом: 10 → краш/бросает signon, 11 → FULL). Реализовано как 16-битный нулевой
+хвост (`SERVERINFO_GMOD_TRAILER_BITS`).
+
+### Живой тест с оригинальным клиентом (дефолтная конфигурация, без флагов)
+
+`srcds-rs --ip <LAN> --port 27215 --game-dir <копия garrysmod>`; клиент
+`gmod.exe -hijack +connect <LAN>:27017` (relay → 27215):
+
+* `Connected to …` → все состояния signon 2→3→4→5→6, сервер логирует `client fully
+  connected`, клиент: `Map: gm_construct`. Клиент жив, краш-дампов не прибавилось,
+  сервер клиента не отключал (стабильно > 10 c).
+* Ограничение: клиентский Lua падает (нет includes/derma/Color/concommand) — геймод не
+  инициализируется; сущности не передаются. Игрок подключён, но не играбелен. Это M4+.
+
+Тест `tests/connect.rs` расширен: `handshake_then_graceful_disconnect_minimal`
+(`--minimal-signon`) и `full_signon_sends_tables_and_advances_state` (ServerInfo +
+svc_CreateStringTable, без disconnect).

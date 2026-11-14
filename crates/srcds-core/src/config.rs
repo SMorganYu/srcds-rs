@@ -32,10 +32,14 @@ pub struct ServerConfig {
     pub game_dir: Option<PathBuf>,
     /// Gamemode name announced to clients.
     pub gamemode: String,
-    /// Attempt the experimental, incomplete world signon (string tables and beyond)
-    /// after ServerInfo. Off by default: that path is unfinished and can disrupt the
-    /// game client, so the default sends ServerInfo then a clean disconnect.
-    pub experimental_full_signon: bool,
+    /// Run the world signon (string tables, class info, entities) after ServerInfo so
+    /// the client loads the map and reaches SignonState(FULL). On by default. When
+    /// false, the server sends ServerInfo then a clean disconnect (useful for probing).
+    pub full_signon: bool,
+    /// File listing client Lua paths (relative to `game_dir`, one per line) to
+    /// announce in `client_lua_files`. Stand-in until a GLua runtime decides this via
+    /// `AddCSLuaFile`; hashes are always computed from this server's own files.
+    pub client_lua_manifest: Option<PathBuf>,
 }
 
 impl Default for ServerConfig {
@@ -59,7 +63,8 @@ impl Default for ServerConfig {
             query_rate_per_ip: 30,
             game_dir: None,
             gamemode: "sandbox".into(),
-            experimental_full_signon: false,
+            full_signon: true,
+            client_lua_manifest: None,
         }
     }
 }

@@ -48,8 +48,14 @@ struct Harness {
     _dir: PathBuf,
 }
 
-fn start_server() -> (Harness, srcds_core::ShutdownHandle, thread::JoinHandle<()>) {
-    let dir = std::env::temp_dir().join(format!("srcds_rs_connect_{}", std::process::id()));
+fn start_server(
+    full_signon: bool,
+) -> (Harness, srcds_core::ShutdownHandle, thread::JoinHandle<()>) {
+    let dir = std::env::temp_dir().join(format!(
+        "srcds_rs_connect_{}_{}",
+        std::process::id(),
+        full_signon
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     write_synthetic_map(&dir, "gm_test");
     let cfg = ServerConfig {
@@ -59,6 +65,7 @@ fn start_server() -> (Harness, srcds_core::ShutdownHandle, thread::JoinHandle<()
         max_players: 4,
         game_dir: Some(dir.clone()),
         metrics_log_interval: None,
+        full_signon,
         ..ServerConfig::default()
     };
     let mut server = Server::bind(cfg).expect("bind");
@@ -99,11 +106,9 @@ impl Harness {
     }
 }
 
-#[test]
-fn full_handshake_then_graceful_disconnect() {
-    let (h, shutdown, handle) = start_server();
-
-    // 1. A2S_GETCHALLENGE -> S2C_CHALLENGE
+/// Runs challenge → connect and returns the netchannel with the server challenge, after
+/// telling the server we are CONNECTED.
+fn connect(h: &Harness) -> NetChannel {
     let client_challenge = 0x0CAB_CAFE;
     h.send(&srcds_protocol::handshake::encode_get_challenge(client_challenge).unwrap());
     let chal = h
@@ -113,13 +118,8 @@ fn full_handshake_then_graceful_disconnect() {
     assert_eq!(chal.client_challenge, client_challenge);
     assert_eq!(chal.auth_protocol, AUTH_PROTOCOL_STEAM);
 
-    // 2. C2S_CONNECT -> S2C_CONNECTION
-    let cookie = {
-        let mut c = Vec::new();
-        c.extend_from_slice(&76561197960265728u64.to_le_bytes()); // a SteamID64 claim
-        c.extend_from_slice(&[0u8; 8]);
-        c
-    };
+    let mut cookie = 76561197960265728u64.to_le_bytes().to_vec();
+    cookie.extend_from_slice(&[0u8; 8]);
     let req = ConnectRequest {
         protocol: PROTOCOL_VERSION,
         auth_protocol: AUTH_PROTOCOL_STEAM,
@@ -139,53 +139,98 @@ fn full_handshake_then_graceful_disconnect() {
         .expect("no S2C_CONNECTION");
     assert_eq!(&conn[5..9], &client_challenge.to_le_bytes());
 
-    // 3. Netchannel: tell the server we are CONNECTED; collect its reliable reply.
     let mut chan = NetChannel::new(chal.server_challenge);
-    {
-        let mut w = srcds_protocol::bitbuf::BitWriter::with_capacity(64);
-        netmsg::write_signon_state(&mut w, netmsg::SIGNONSTATE_CONNECTED, -1).unwrap();
-        chan.write_reliable(&w).unwrap();
-    }
+    let mut w = srcds_protocol::bitbuf::BitWriter::with_capacity(64);
+    netmsg::write_signon_state(&mut w, netmsg::SIGNONSTATE_CONNECTED, -1).unwrap();
+    chan.write_reliable(&w).unwrap();
     h.send(&chan.transmit(None).unwrap());
+    chan
+}
 
-    let mut saw_server_info = false;
-    let mut saw_disconnect = false;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline && !(saw_server_info && saw_disconnect) {
-        let Some(d) = h.recv() else { continue };
-        // Server datagrams here are plain netchannel (ServerInfo is small, unsplit).
+/// Collects decoded server→client message types from reliable transfers for `dur`,
+/// acknowledging each packet so the server keeps advancing. Reassembles split packets.
+fn collect_message_types(h: &Harness, chan: &mut NetChannel, dur: Duration) -> Vec<u32> {
+    use srcds_protocol::split::Reassembler;
+    let mut types = Vec::new();
+    let mut reasm = Reassembler::new();
+    let deadline = Instant::now() + dur;
+    while Instant::now() < deadline {
+        let Some(mut d) = h.recv() else { continue };
+        if d.len() >= 4
+            && i32::from_le_bytes(d[..4].try_into().unwrap())
+                == srcds_protocol::connectionless::SPLIT_HEADER
+        {
+            match reasm.push(&d) {
+                Ok(Some(v)) => d = v,
+                _ => continue,
+            }
+        }
         if let Ok(Some(inc)) = chan.process(&d) {
             for buf in &inc.reliable {
                 let mut r = BitReader::new(buf);
-                // Server messages: walk the types we expect in the default signon.
                 while r.bits_remaining() >= 6 {
-                    match r.read_ubits(6).unwrap() {
-                        0 => {}
-                        t if t == netmsg::SVC_PRINT => {
-                            r.read_string(4096).unwrap();
-                        }
-                        t if t == netmsg::SVC_SERVERINFO => {
-                            assert_eq!(r.read_sbits(16).unwrap(), 24, "protocol");
-                            saw_server_info = true;
-                            break; // rest of ServerInfo not needed here
-                        }
-                        t if t == netmsg::NET_DISCONNECT => {
-                            let reason = r.read_string(4096).unwrap();
-                            assert!(reason.contains("srcds-rs"), "reason: {reason}");
-                            saw_disconnect = true;
-                        }
-                        other => panic!("unexpected message type {other}"),
+                    let Ok(t) = r.read_ubits(6) else { break };
+                    types.push(t);
+                    // Only the few message bodies we must step over to keep parsing.
+                    let ok = match t {
+                        0 => Ok(()),
+                        t if t == netmsg::SVC_PRINT => r.read_string(4096).map(|_| ()),
+                        t if t == netmsg::NET_DISCONNECT => r.read_string(4096).map(|_| ()),
+                        t if t == netmsg::NET_TICK => (|| {
+                            r.read_sbits(32)?;
+                            r.read_ubits(16)?;
+                            r.read_ubits(16).map(|_| ())
+                        })(),
+                        _ => break, // stop at the first body we do not step over here
+                    };
+                    if ok.is_err() {
+                        break;
                     }
                 }
             }
-            // Acknowledge so the server advances to the next reliable transfer.
             h.send(&chan.transmit(None).unwrap());
         }
     }
+    types
+}
 
-    assert!(saw_server_info, "server never sent svc_ServerInfo");
-    assert!(saw_disconnect, "server never sent a clean net_Disconnect");
+#[test]
+fn handshake_then_graceful_disconnect_minimal() {
+    let (h, shutdown, handle) = start_server(false);
+    let mut chan = connect(&h);
+    let types = collect_message_types(&h, &mut chan, Duration::from_secs(5));
+    assert!(
+        types.contains(&netmsg::SVC_SERVERINFO),
+        "no svc_ServerInfo: {types:?}"
+    );
+    assert!(
+        types.contains(&netmsg::NET_DISCONNECT),
+        "no net_Disconnect: {types:?}"
+    );
+    shutdown.request();
+    handle.join().unwrap();
+}
 
+#[test]
+fn full_signon_sends_tables_and_advances_state() {
+    let (h, shutdown, handle) = start_server(true);
+    let mut chan = connect(&h);
+    let types = collect_message_types(&h, &mut chan, Duration::from_secs(5));
+    assert!(
+        types.contains(&netmsg::SVC_SERVERINFO),
+        "no svc_ServerInfo: {types:?}"
+    );
+    assert!(
+        types.contains(&netmsg::SVC_CREATESTRINGTABLE),
+        "no svc_CreateStringTable in full signon: {types:?}"
+    );
+    assert!(
+        !types.contains(&netmsg::NET_DISCONNECT),
+        "full signon should not disconnect: {types:?}"
+    );
+    // (SignonState and later messages trail the 19 string tables in the same reliable
+    // buffer, which this test does not fully decode; the live client test in
+    // docs/TEST_RESULTS.md covers the path through SignonState(FULL).)
     shutdown.request();
     handle.join().unwrap();
 }

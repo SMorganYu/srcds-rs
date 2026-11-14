@@ -339,8 +339,20 @@ pub fn write_server_info(w: &mut BitWriter, s: &ServerInfo<'_>) -> Result<()> {
     w.write_string(s.sky_name)?;
     w.write_string(s.host_name)?;
     w.write_string(s.gmod_extra)?;
-    w.write_string(s.gamemode)
+    w.write_string(s.gamemode)?;
+    // [факт] After the two GMod strings the client's svc_ServerInfo reader consumes a
+    // further trailer: a live client reaches SignonState(FULL) only when at least 11
+    // extra bits are present (10 or fewer → the read overflows and the client aborts
+    // the signon). The reference server left these bits set (its 18 trailing bits after
+    // the gamemode string were all ones). Their meaning is unestablished [гипотеза]; we
+    // send zeroes, which the client accepts, and any bits it does not consume read back
+    // as net_NOP. 16 is a safe round width ≥ the observed threshold.
+    w.write_ubits(0, SERVERINFO_GMOD_TRAILER_BITS)?;
+    Ok(())
 }
+
+/// Width of the GMod-specific `svc_ServerInfo` trailer (see `write_server_info`).
+pub const SERVERINFO_GMOD_TRAILER_BITS: u32 = 16;
 
 /// `svc_ClassInfo` telling the client to build class tables from its own DLL.
 pub fn write_class_info_create_on_client(w: &mut BitWriter, num_classes: u16) -> Result<()> {
@@ -519,6 +531,10 @@ mod tests {
         };
         let mut w = BitWriter::with_capacity(512);
         write_server_info(&mut w, &s).unwrap();
-        assert_eq!(w.bit_len(), 1902 - 1150);
+        // stock + 2 GMod strings + the 16-bit GMod trailer.
+        assert_eq!(
+            w.bit_len(),
+            (1902 - 1150) + SERVERINFO_GMOD_TRAILER_BITS as usize
+        );
     }
 }
