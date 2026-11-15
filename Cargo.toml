@@ -5,6 +5,7 @@ members = [
     "crates/srcds-net",
     "crates/srcds-core",
     "crates/srcds-server",
+    "crates/srcds-lua",
     "tools/packet-diff",
 ]
 

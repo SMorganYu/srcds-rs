@@ -1,0 +1,15 @@
+[package]
+name = "srcds-lua"
+description = "GLua (Garry's Mod Lua) server runtime for srcds-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mlua = { version = "0.10", features = ["luajit", "vendored"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+tracing.workspace = true
+
+[lints]
+workspace = true

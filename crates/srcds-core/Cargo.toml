@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 srcds-protocol.workspace = true
 srcds-net.workspace = true
+srcds-lua = { path = "../srcds-lua" }
 thiserror.workspace = true
 tracing.workspace = true
 md-5.workspace = true

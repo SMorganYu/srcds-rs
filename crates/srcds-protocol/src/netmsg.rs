@@ -18,6 +18,7 @@ pub const NET_SIGNONSTATE: u32 = 6;
 
 pub const SVC_PRINT: u32 = 7;
 pub const SVC_SERVERINFO: u32 = 8;
+pub const SVC_SENDTABLE: u32 = 9;
 pub const SVC_CLASSINFO: u32 = 10;
 pub const SVC_SETPAUSE: u32 = 11;
 pub const SVC_CREATESTRINGTABLE: u32 = 12;
@@ -88,6 +89,8 @@ pub enum ClientMessage {
         new_commands: u32,
         backup_commands: u32,
         bits: usize,
+        /// The delta-encoded user commands (`bits` bits), oldest first.
+        data: Vec<u8>,
     },
     VoiceData {
         bits: usize,
@@ -106,8 +109,11 @@ pub enum ClientMessage {
     CmdKeyValues {
         bytes: usize,
     },
+    /// GMod packet: first byte = type (0 = Lua net message: u16 network-string id
+    /// then the message body; 2 = client Lua error text).
     GModClientToServer {
         bits: usize,
+        data: Vec<u8>,
     },
 }
 
@@ -131,6 +137,24 @@ pub fn decode_client_messages(
 fn skip(r: &mut BitReader<'_>, bits: usize) -> Result<usize> {
     r.skip_bits(bits)?;
     Ok(bits)
+}
+
+/// Copies `bits` bits out of `r` into a byte buffer (LSB-first, zero padded).
+pub fn take_bits(r: &mut BitReader<'_>, bits: usize) -> Result<Vec<u8>> {
+    if bits > r.bits_remaining() {
+        return Err(ProtocolError::Truncated {
+            needed: bits,
+            remaining: r.bits_remaining(),
+        });
+    }
+    let mut out = Vec::with_capacity(bits.div_ceil(8));
+    let mut left = bits;
+    while left > 0 {
+        let n = left.min(8) as u32;
+        out.push(r.read_ubits(n)? as u8);
+        left -= n as usize;
+    }
+    Ok(out)
 }
 
 fn decode_client_message(r: &mut BitReader<'_>) -> Result<Option<ClientMessage>> {
@@ -198,7 +222,8 @@ fn decode_client_message(r: &mut BitReader<'_>) -> Result<Option<ClientMessage>>
             ClientMessage::Move {
                 new_commands,
                 backup_commands,
-                bits: skip(r, len)?,
+                bits: len,
+                data: take_bits(r, len)?,
             }
         }
         CLC_VOICEDATA => {
@@ -237,7 +262,8 @@ fn decode_client_message(r: &mut BitReader<'_>) -> Result<Option<ClientMessage>>
         CLC_GMOD_CLIENTTOSERVER => {
             let len = r.read_ubits(20)? as usize;
             ClientMessage::GModClientToServer {
-                bits: skip(r, len)?,
+                bits: len,
+                data: take_bits(r, len)?,
             }
         }
         other => return Err(ProtocolError::UnknownType(other as u8)),
@@ -397,6 +423,24 @@ pub fn write_gmod_server_to_client(w: &mut BitWriter, payload: &[u8], bits: usiz
     w.append_bits(payload, bits)
 }
 
+/// `svc_UserMessage`: [факт] u8 message type, 11-bit length in bits, data (every
+/// packet of the reference demo with user messages parses exactly with this layout).
+pub fn write_user_message(w: &mut BitWriter, msg_type: u8, data: &[u8], bits: usize) -> Result<()> {
+    if bits >= 1 << 11 {
+        return Err(crate::error::ProtocolError::Oversized { size: bits / 8, limit: 255 });
+    }
+    ty(w, SVC_USERMESSAGE)?;
+    w.write_ubits(msg_type as u32, 8)?;
+    w.write_ubits(bits as u32, 11)?;
+    w.append_bits(data, bits)
+}
+
+/// User message ids in the game DLL's registration order. [факт] order read from the
+/// reference server; sizes of `Train` (1 byte), `ResetHUD` (1) and `Battery` (2) match
+/// the reference demo.
+pub const UM_SAYTEXT: u8 = 3;
+pub const UM_TEXTMSG: u8 = 4;
+
 /// `svc_PacketEntities` header + raw entity data.
 #[derive(Debug, Clone)]
 pub struct PacketEntities<'a> {
@@ -409,7 +453,18 @@ pub struct PacketEntities<'a> {
     pub data_bits: usize,
 }
 
+/// Width of the `svc_PacketEntities` payload length. [факт] GMod uses 24 bits (stock
+/// Source: 20): with 24, every reference-server packet in a recorded demo decodes to
+/// exactly the declared length; with 20 none does (4 bits left over).
+pub const PACKETENTITIES_LENGTH_BITS: u32 = 24;
+
 pub fn write_packet_entities(w: &mut BitWriter, p: &PacketEntities<'_>) -> Result<()> {
+    if p.data_bits >= 1 << PACKETENTITIES_LENGTH_BITS {
+        return Err(ProtocolError::InvalidField {
+            field: "packetentities",
+            reason: "payload too long",
+        });
+    }
     ty(w, SVC_PACKETENTITIES)?;
     w.write_ubits(p.max_entries, MAX_EDICT_BITS)?;
     w.write_bit(p.delta_from.is_some())?;
@@ -418,7 +473,7 @@ pub fn write_packet_entities(w: &mut BitWriter, p: &PacketEntities<'_>) -> Resul
     }
     w.write_ubits(p.baseline, 1)?;
     w.write_ubits(p.updated_entries, MAX_EDICT_BITS)?;
-    w.write_ubits(p.data_bits as u32, 20)?;
+    w.write_ubits(p.data_bits as u32, PACKETENTITIES_LENGTH_BITS)?;
     w.write_bit(p.update_baseline)?;
     w.append_bits(p.data, p.data_bits)
 }
@@ -480,7 +535,7 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(m[1], ClientMessage::GModClientToServer { bits: 24 });
+        assert!(matches!(&m[1], ClientMessage::GModClientToServer { bits: 24, data } if data.len() == 3));
     }
 
     #[test]

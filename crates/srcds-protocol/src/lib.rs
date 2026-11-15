@@ -15,8 +15,10 @@ pub mod handshake;
 pub mod lzss;
 pub mod netchan;
 pub mod netmsg;
+pub mod sendtable;
 pub mod split;
 pub mod stringtable;
+pub mod usercmd;
 
 pub use error::ProtocolError;
 

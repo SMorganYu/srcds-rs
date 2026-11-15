@@ -78,7 +78,9 @@ impl StringTable {
         let mut w = BitWriter::with_capacity(
             64 + self.entries[from..to].iter().map(entry_size).sum::<usize>(),
         );
-        let mut last: isize = from as isize - 1;
+        // the receiver starts every message at "before entry 0", so the first entry of
+        // an update names its index explicitly
+        let mut last: isize = -1;
         for (i, e) in self.entries[from..to].iter().enumerate() {
             let idx = from + i;
             if idx as isize == last + 1 {

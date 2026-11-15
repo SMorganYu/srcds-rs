@@ -68,12 +68,14 @@ fn start_server(
         full_signon,
         ..ServerConfig::default()
     };
-    let mut server = Server::bind(cfg).expect("bind");
-    let addr = server.local_addr().unwrap();
-    let shutdown = server.shutdown_handle();
+    // the server owns a Lua state (not Send): build it on its own thread
+    let (tx, rx) = std::sync::mpsc::channel();
     let handle = thread::spawn(move || {
+        let mut server = Server::bind(cfg).expect("bind");
+        tx.send((server.local_addr().unwrap(), server.shutdown_handle())).unwrap();
         server.run().unwrap();
     });
+    let (addr, shutdown) = rx.recv().unwrap();
     let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
     sock.connect(addr).unwrap();
     sock.set_read_timeout(Some(Duration::from_millis(200)))

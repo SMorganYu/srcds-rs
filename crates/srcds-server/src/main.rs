@@ -114,7 +114,7 @@ fn main() -> ExitCode {
     if let Err(e) = ctrlc::set_handler(move || shutdown.request()) {
         warn!(error = %e, "could not install Ctrl+C handler");
     }
-    spawn_console(console_shutdown);
+    spawn_console(console_shutdown, server.console_sender());
     info!(
         addr = %server.local_addr().map(|a| a.to_string()).unwrap_or_default(),
         map = %cfg.map,
@@ -134,9 +134,10 @@ fn main() -> ExitCode {
     }
 }
 
-/// Minimal server console on stdin. EOF (no console attached) is not treated as
-/// a quit request, so the server can run detached.
-fn spawn_console(shutdown: srcds_core::ShutdownHandle) {
+/// Minimal server console on stdin (`quit`; `status`, `stats` are handled by the
+/// server thread). EOF (no console attached) is not treated as a quit request, so the
+/// server can run detached.
+fn spawn_console(shutdown: srcds_core::ShutdownHandle, to_server: std::sync::mpsc::Sender<String>) {
     let spawned = std::thread::Builder::new()
         .name("console".into())
         .spawn(move || {
@@ -155,7 +156,11 @@ fn spawn_console(shutdown: srcds_core::ShutdownHandle) {
                         shutdown.request();
                         return;
                     }
-                    other => warn!(command = other, "unknown console command (supported: quit)"),
+                    other => {
+                        if to_server.send(other.to_string()).is_err() {
+                            return;
+                        }
+                    }
                 }
             }
         });

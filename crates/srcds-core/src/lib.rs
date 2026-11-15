@@ -7,12 +7,24 @@
 
 pub mod bsp;
 pub mod client;
+pub mod clientlua;
+pub mod collision;
 pub mod config;
+pub mod displacement;
+pub mod entities;
+pub mod game_lua;
+pub mod gameevents;
 pub mod metrics;
+pub mod movement;
+pub mod physics;
 pub mod query;
 pub mod server;
 pub mod signon;
+pub mod status;
 pub mod steaminf;
+pub mod vpk;
+pub mod weapon_sim;
+pub mod weapons;
 
 pub use config::ServerConfig;
 pub use metrics::{Metrics, MetricsSnapshot};
