@@ -216,6 +216,15 @@ impl WeaponSystem {
                 return true;
             }
             self.release(glua, ply);
+            // the base holster cancels a reload in progress
+            let _ = with(&glua.lua, active, |e| {
+                e.nw.remove("__srcds_in_reload");
+            });
+            // [факт] live client: it predicts `m_hLastWeapon` = the weapon put away
+            let h = entities::ehandle(active.id, active.serial);
+            let _ = with(&glua.lua, ply, |e| {
+                e.nw.insert("__srcds_last_weapon".into(), srcds_lua::entity::NetValue::Int(h as i64));
+            });
         }
         let _ = entity::with_player(&glua.lua, ply, |p, _| p.active_weapon = new);
         // the new view model draws (Deploy may choose another activity); attacks wait
@@ -224,9 +233,11 @@ impl WeaponSystem {
         entity::set_view_model_activity(&glua.lua, vm, "ACT_VM_DRAW");
         swep_call(glua, new, "Deploy");
         let path = crate::weapon_sim::view_model_path(glua, models, new);
-        let before = entity::with(&glua.lua, new, |e| e.nw.contains_key("__srcds_vm_pending")).unwrap_or(false);
+        let pending = entity::with(&glua.lua, vm, |e| e.nw.contains_key("__srcds_vm_pending")).unwrap_or(false);
         crate::weapon_sim::resolve_lua_anims(glua, models, new, vm, &path, now);
-        if before {
+        if pending {
+            // [факт] live client (`cl_showerror 2`): after a draw it predicts both next
+            // attacks and the owner's `m_flNextAttack` at the draw's end (= the idle time)
             let idle = store(&glua.lua).ok().and_then(|s| s.get(new).and_then(|e| match e.nw.get("__srcds_idle") {
                 Some(srcds_lua::entity::NetValue::Float(f)) => Some(*f),
                 _ => None,
@@ -235,6 +246,9 @@ impl WeaponSystem {
                 let _ = with(&glua.lua, new, |e| {
                     e.nw.insert("__srcds_npf".into(), srcds_lua::entity::NetValue::Float(end));
                     e.nw.insert("__srcds_nsf".into(), srcds_lua::entity::NetValue::Float(end));
+                });
+                let _ = with(&glua.lua, ply, |e| {
+                    e.nw.insert("__srcds_next_attack".into(), srcds_lua::entity::NetValue::Float(end));
                 });
             }
         }
@@ -245,9 +259,15 @@ impl WeaponSystem {
     pub fn release(&mut self, glua: &GLua, ply: EntRef) {
         if let Some(g) = self.grabs.remove(&ply) {
             let _ = with(&glua.lua, g.ent, |d| {
+                let mut frozen = false;
                 if let Some(p) = &mut d.phys {
                     p.held = false;
                     p.asleep = false;
+                    frozen = !p.motion;
+                }
+                // a frozen prop let go stays where it was put
+                if frozen {
+                    d.vel = [0.0; 3];
                 }
             });
             if entity::valid(&glua.lua, g.ent) {
@@ -284,7 +304,20 @@ impl WeaponSystem {
                 glua.hook_call("OnPhysgunReload", (w, p));
             }
         }
-        if buttons & IN_ATTACK == 0 {
+        // right click while holding: freeze and let go
+        if pressed(IN_ATTACK2) {
+            if let Some(g) = self.grabs.get(&ply).copied() {
+                if entity::valid(&glua.lua, g.ent) {
+                    self.freeze(glua, ply, weapon, g.ent);
+                }
+                self.grabs.remove(&ply);
+                return;
+            }
+        }
+        // [факт] reference `CWeaponPhysGun::ItemPostFrame`: the beam works only while
+        // primary fire is held without alt-fire (`buttons & 0x801 == IN_ATTACK`),
+        // otherwise it lets go
+        if buttons & (IN_ATTACK | IN_ATTACK2) != IN_ATTACK {
             self.release(glua, ply);
             return;
         }
@@ -292,11 +325,6 @@ impl WeaponSystem {
         if let Some(g) = self.grabs.get(&ply).copied() {
             if !entity::valid(&glua.lua, g.ent) {
                 self.grabs.remove(&ply);
-                return;
-            }
-            // right click while holding: freeze and let go
-            if pressed(IN_ATTACK2) {
-                self.freeze(glua, ply, weapon, g.ent);
                 return;
             }
             let mut g = g;
@@ -314,9 +342,9 @@ impl WeaponSystem {
                 }
                 e.pos = desired;
                 e.ang = ang;
+                // a frozen prop is moved but stays frozen
                 if let Some(p) = &mut e.phys {
                     p.asleep = false;
-                    p.motion = true;
                     p.held = true;
                     p.ang_vel = [0.0; 3];
                 }
@@ -369,7 +397,6 @@ impl WeaponSystem {
         self.grabs.insert(ply, Grab { ent, dist, local, rel_f, rel_u });
         let _ = with(&glua.lua, ent, |d| {
             if let Some(ph) = &mut d.phys {
-                ph.motion = true;
                 ph.asleep = false;
             }
         });

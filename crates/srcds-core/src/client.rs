@@ -290,6 +290,9 @@ impl Client {
             ammo: Vec::new(),
             player_color: [0.24, 0.34, 0.41],
             weapon_color: [0.3, 1.8, 2.1],
+            next_attack: 0.0,
+            last_weapon: entities::INVALID_EHANDLE,
+            player_class: 0,
         });
         self.last_command = None;
     }
@@ -389,9 +392,6 @@ impl Client {
                 _ => {}
             }
             self.buttons = c.buttons as i32;
-            if c.weapon_select != 0 {
-                self.weapon_select = Some(c.weapon_select);
-            }
             self.mouse_wheel += c.mouse_wheel as i32;
             self.mouse_delta.0 += c.mouse_dx as i32;
             self.mouse_delta.1 += c.mouse_dy as i32;
@@ -408,7 +408,10 @@ impl Client {
                         old_buttons: self.last_cmd_buttons,
                         eye: [o[0], o[1], o[2] + view],
                         angles: pawn.angles,
+                        select: c.weapon_select,
                     });
+                } else if c.weapon_select != 0 {
+                    self.weapon_select = Some(c.weapon_select);
                 }
                 self.last_cmd_buttons = c.buttons as i32;
             }

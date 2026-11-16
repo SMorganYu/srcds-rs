@@ -28,6 +28,9 @@ pub struct WeaponCmd {
     pub old_buttons: i32,
     pub eye: [f32; 3],
     pub angles: [f32; 3],
+    /// Weapon entity index the command switches to (`weaponselect`, 0 = none): the
+    /// client switches before that command's weapon frame.
+    pub select: u32,
 }
 
 /// Command time for a tick base, as the client computes it (float interval).
@@ -114,6 +117,10 @@ pub fn resolve_lua_anims(glua: &GLua, models: &mut WeaponModels, w: EntRef, vm: 
         let end = t + dur as f64;
         set_nw(glua, w, "__srcds_npf", NetValue::Float(end));
         set_nw(glua, w, "__srcds_nsf", NetValue::Float(end));
+        // [факт] live client: a reload also sets the owner's `m_flNextAttack` to its end
+        if let Ok(owner) = with(&glua.lua, w, |e| e.weapon_owner) {
+            set_nw(glua, owner, "__srcds_next_attack", NetValue::Float(end));
+        }
     }
 }
 
@@ -133,6 +140,18 @@ fn swep_automatic(glua: &GLua, w: EntRef, key: &str) -> bool {
         .and_then(|t| t.get::<Table>(key).ok())
         .and_then(|p| p.get::<Option<bool>>("Automatic").ok().flatten())
         .unwrap_or(false)
+}
+
+/// Weapon state summary for the `wepdbg` trace.
+fn debug_state(glua: &GLua, w: EntRef) -> String {
+    let (clip, max, reload) = with(&glua.lua, w, |e| (e.clip1, e.max_clip1, e.nw.contains_key("__srcds_in_reload"))).unwrap_or((0, 0, false));
+    format!(
+        "clip={clip}/{max} reserve={} reload={reload} npf={:.3} nsf={:.3} idle={:.3}",
+        reserve_ammo(glua, w),
+        nw_time(glua, w, "__srcds_npf"),
+        nw_time(glua, w, "__srcds_nsf"),
+        nw_time(glua, w, "__srcds_idle")
+    )
 }
 
 fn set_lua_time(glua: &GLua, t: f64) -> Option<f64> {
@@ -206,10 +225,18 @@ impl WeaponSystem {
         let path = view_model_path(glua, models, w);
         let saved = set_lua_time(glua, cmd.time);
         let mut killed = Vec::new();
+        let before = debug_state(glua, w);
+        // [факт] the player's weapon frame waits for `m_flNextAttack` (deploy, reload);
+        // until then the weapon only gets its busy frame (nothing for HL2 weapons)
+        let busy = cmd.time < nw_time(glua, ply, "__srcds_next_attack");
         if scripted {
             swep_command(glua, models, w, vm, &path, cmd);
-        } else {
+        } else if !busy {
             self.engine_command(glua, models, ply, w, vm, &path, &class, cmd, &mut killed);
+        }
+        let after = debug_state(glua, w);
+        if before != after || cmd.buttons != cmd.old_buttons {
+            tracing::debug!(target: "wepdbg", class = %class, t = cmd.time, buttons = cmd.buttons, busy, before = %before, after = %after, "weapon command");
         }
         if let Some(old_t) = saved {
             set_lua_time(glua, old_t);
@@ -295,6 +322,10 @@ impl WeaponSystem {
         // a reload that has run its course fills the clip
         if uses_clip && has_nw(glua, w, "__srcds_in_reload") && nw_time(glua, w, "__srcds_npf") <= t {
             entity::finish_reload(&glua.lua, w);
+            // [факт] live client: after the reload both attacks are ready at once
+            // (it predicted `m_flNextSecondaryAttack` = the finishing command's time)
+            set_nw(glua, w, "__srcds_npf", NetValue::Float(t));
+            set_nw(glua, w, "__srcds_nsf", NetValue::Float(t));
         }
         let clip = || with(&glua.lua, w, |e| e.clip1).unwrap_or(0);
         // alt-fire: with secondary ammo (or none needed) the weapon's own, else the

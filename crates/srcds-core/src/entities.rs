@@ -291,8 +291,15 @@ pub fn tables() -> (Vec<ServerClass>, TableSet) {
             vec![
                 SendProp::baseclass("DT_BaseFlex"),
                 int_u("m_hActiveWeapon", 23),
+                // [факт] reference server.dll: `bcc_localdata` (local player only there)
+                SendProp::table("bcc_localdata", "DT_BCCLocalPlayerExclusive"),
                 SendProp::table("m_hMyWeapons", "m_hMyWeapons"),
             ],
+        ),
+        t(
+            "DT_BCCLocalPlayerExclusive",
+            // [факт] reference: a time stored as a double (sizeof 8)
+            vec![SendProp::double("m_flNextAttack")],
         ),
         t(
             "m_hMyWeapons",
@@ -491,6 +498,7 @@ pub fn tables() -> (Vec<ServerClass>, TableSet) {
                 SendProp::table("m_iAmmo", "m_iAmmo"),
                 int_s("m_nTickBase", 32),
                 int_u("m_hGroundEntity", 23),
+                int_u("m_hLastWeapon", 23),
                 SendProp::float("m_flLaggedMovementValue"),
             ],
         ),
@@ -539,6 +547,10 @@ pub fn tables() -> (Vec<ServerClass>, TableSet) {
                 int_u("m_bSprintEnabled", 1),
                 int_u("m_bCanWalk", 1),
                 int_u("m_bCanZoom", 1),
+                // [факт] reference server.dll: `m_PlayerClass`, 15-bit signed int — the
+                // player_manager class id (util.NetworkStringToID); without it the client
+                // runs no player-class hooks (sandbox jump boost) while predicting
+                int_s("m_PlayerClass", 15),
                 SendProp::float("m_StepSize"),
                 SendProp::float("m_JumpPower"),
                 SendProp::vector("m_ViewOffset"),
@@ -1108,6 +1120,12 @@ pub struct PlayerPawn {
     pub ammo: Vec<i32>,
     pub player_color: [f32; 3],
     pub weapon_color: [f32; 3],
+    /// `m_flNextAttack`: no weapon frame before this time (deploy, reload).
+    pub next_attack: f64,
+    /// `m_hLastWeapon`: the weapon held before the current one.
+    pub last_weapon: i32,
+    /// `m_PlayerClass`: player_manager class id.
+    pub player_class: i32,
 }
 
 /// Entity handles a player networks for its weapons.
@@ -1499,6 +1517,9 @@ pub fn player(
     .set(nc, "DT_HL2MP_Player", "m_fIsWalking", PropValue::Int(p.mv.walking as i32))
     .set(nc, "DT_GMOD_Player", "m_bCanWalk", PropValue::Int(1))
     .set(nc, "DT_GMOD_Player", "m_bCanZoom", PropValue::Int(1))
+    .set(nc, "DT_GMOD_Player", "m_PlayerClass", PropValue::Int(p.player_class))
+    .set(nc, "DT_BCCLocalPlayerExclusive", "m_flNextAttack", PropValue::Double(p.next_attack))
+    .set(nc, "DT_LocalPlayerExclusive", "m_hLastWeapon", PropValue::Int(p.last_weapon))
     .set(
         nc,
         "DT_GMOD_Player",
@@ -1580,6 +1601,9 @@ mod tests {
             ammo: Vec::new(),
             player_color: [0.24, 0.34, 0.41],
             weapon_color: [0.3, 1.8, 2.1],
+            next_attack: 0.0,
+            last_weapon: INVALID_EHANDLE,
+            player_class: 0,
         }
     }
 

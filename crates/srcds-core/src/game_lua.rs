@@ -438,6 +438,13 @@ impl LuaGame {
                 if let Some(d) = c.world_click {
                     cmd.angles = srcds_lua::vecang::vector_angles(d);
                 }
+                // a switch happens at its command's time, before that command's
+                // weapon frame (as the client predicts it); a weapon not given yet is
+                // retried for a moment
+                if cmd.select != 0 && !ws.select(&self.glua, &mut models, r, cmd.select, cmd.time) {
+                    c.weapon_select = Some(cmd.select);
+                    c.weapon_select_age = 0;
+                }
                 for victim in ws.run_command(&self.glua, &mut models, r, &cmd) {
                     self.glua.player_kill(victim, false);
                 }
@@ -501,6 +508,14 @@ impl LuaGame {
                 // the model Lua chose (player_manager / cl_playermodel)
                 let model_index = (!e.model.is_empty()).then(|| _game.precache_model(&e.model)).flatten();
                 let dt = dtvars(e);
+                let nwnum = |k: &str| match e.nw.get(k) {
+                    Some(srcds_lua::entity::NetValue::Float(f)) => Some(*f),
+                    Some(srcds_lua::entity::NetValue::Int(i)) => Some(*i as f64),
+                    _ => None,
+                };
+                let next_attack = nwnum("__srcds_next_attack").unwrap_or(0.0);
+                let last_weapon = nwnum("__srcds_last_weapon").map_or(entities::INVALID_EHANDLE, |h| h as i32);
+                let player_class = nwnum("__srcds_class").unwrap_or(0.0) as i32;
                 if let Some(srcds_lua::entity::NetValue::Str(k)) = e.nw.remove("__srcds_kick") {
                     kick = Some(k);
                 }
@@ -527,6 +542,9 @@ impl LuaGame {
                     }
                     p.ammo = ammo;
                     p.weapon_color = weapon_color;
+                    p.next_attack = next_attack;
+                    p.last_weapon = last_weapon;
+                    p.player_class = player_class;
                     if let Some(m) = model_index {
                         p.model_index = m;
                     }
@@ -897,7 +915,7 @@ mod tests {
                 _ => -1.0,
             };
             assert_eq!(nw_i(vm, "__srcds_vm_seq"), 7, "draw");
-            let cmd = |t: f64, b: i32, old: i32| crate::weapon_sim::WeaponCmd { time: t, buttons: b, old_buttons: old, eye: [0.0, 0.0, 64.0], angles: [0.0; 3] };
+            let cmd = |t: f64, b: i32, old: i32| crate::weapon_sim::WeaponCmd { select: 0, time: t, buttons: b, old_buttons: old, eye: [0.0, 0.0, 64.0], angles: [0.0; 3] };
             // after the draw, idle
             let p0 = nw_i(vm, "__srcds_vm_parity");
             ws.run_command(&lua.glua, &mut models, _ply, &cmd(11.0, 0, 0));
@@ -920,10 +938,34 @@ mod tests {
             ws.run_command(&lua.glua, &mut models, _ply, &cmd(end + 0.01, 0, 0));
             let clip2 = srcds_lua::entity::with(&lua.glua.lua, pistol, |e| e.clip1).unwrap();
             assert_eq!(clip2, clip0, "clip refilled");
+            // as in game: one command per tick, a shot, then R held for a while
+            {
+                let tick = |k: i32| crate::weapon_sim::command_time(k, 0.015);
+                let mut old = 0;
+                let mut run = |k: i32, b: i32, ws: &mut crate::weapons::WeaponSystem, models: &mut crate::weapons::WeaponModels| {
+                    ws.run_command(&lua.glua, models, _ply, &cmd(tick(k), b, old));
+                    old = b;
+                };
+                let k0 = 1100;
+                run(k0, 1, &mut ws, &mut models);
+                for k in k0 + 1..k0 + 40 {
+                    run(k, 0, &mut ws, &mut models);
+                }
+                let c1 = srcds_lua::entity::with(&lua.glua.lua, pistol, |e| e.clip1).unwrap();
+                assert_eq!(c1, clip0 - 1);
+                for k in k0 + 40..k0 + 50 {
+                    run(k, 1 << 13, &mut ws, &mut models);
+                }
+                for k in k0 + 50..k0 + 300 {
+                    run(k, 0, &mut ws, &mut models);
+                }
+                let c2 = srcds_lua::entity::with(&lua.glua.lua, pistol, |e| e.clip1).unwrap();
+                assert_eq!(c2, clip0, "tick-by-tick reload refills");
+            }
             // pistol: clicking fast refires before its 0.5 s rate, counting up the recoil
             let path = crate::weapon_sim::view_model_path(&lua.glua, &mut models, pistol);
             let seq = |m: &mut crate::weapons::WeaponModels, a: &str| m.sequence_info(&path, a).0 as i64;
-            let t0 = end + 1.0;
+            let t0 = end + 11.0;
             ws.run_command(&lua.glua, &mut models, _ply, &cmd(t0, 1, 0));
             assert_eq!(nw_i(vm, "__srcds_vm_seq"), seq(&mut models, "ACT_VM_PRIMARYATTACK"));
             assert!((nw_f(pistol, "__srcds_npf") - (t0 + 0.5)).abs() < 1e-6);
@@ -1011,7 +1053,7 @@ mod tests {
             }
             assert!(!ws.projectiles.iter().any(|p| p.kind == crate::weapon_sim::ProjectileKind::Grenade), "grenade exploded");
             // a bolt in open air flies 3500 u/s
-            let open = crate::weapon_sim::WeaponCmd { time: 75.0, buttons: 0, old_buttons: 0, eye: [704.0, 132.0, -79.0], angles: [0.0, 180.0, 0.0] };
+            let open = crate::weapon_sim::WeaponCmd { select: 0, time: 75.0, buttons: 0, old_buttons: 0, eye: [704.0, 132.0, -79.0], angles: [0.0, 180.0, 0.0] };
             ws.launch(&lua.glua, _ply, &open, crate::weapon_sim::ProjectileKind::Bolt);
             let bolt = ws.projectiles.last().unwrap().ent;
             let b0 = srcds_lua::entity::with(&lua.glua.lua, bolt, |e| e.pos).unwrap();
@@ -1022,7 +1064,7 @@ mod tests {
             eprintln!("bolt {b0:?} -> {b1:?}");
             assert!(b0[0] - b1[0] > 150.0, "bolt flew");
             // a grenade lobbed at the floor bursts there (well before it would expire)
-            let lob = crate::weapon_sim::WeaponCmd { time: 76.0, buttons: 0, old_buttons: 0, eye: [704.0, 132.0, -79.0], angles: [45.0, 180.0, 0.0] };
+            let lob = crate::weapon_sim::WeaponCmd { select: 0, time: 76.0, buttons: 0, old_buttons: 0, eye: [704.0, 132.0, -79.0], angles: [45.0, 180.0, 0.0] };
             ws.launch(&lua.glua, _ply, &lob, crate::weapon_sim::ProjectileKind::Grenade);
             for i in 0..40 {
                 ws.step_projectiles(&lua.glua, 600.0, 0.015, 76.0 + i as f64 * 0.015);
@@ -1074,7 +1116,7 @@ mod tests {
                 Some(srcds_lua::entity::NetValue::Float(f)) => f,
                 _ => -1.0,
             };
-            let cmd = |t: f64, b: i32, old: i32, pitch: f32| crate::weapon_sim::WeaponCmd { time: t, buttons: b, old_buttons: old, eye: [704.0, 132.0, -79.0], angles: [pitch, 0.0, 0.0] };
+            let cmd = |t: f64, b: i32, old: i32, pitch: f32| crate::weapon_sim::WeaponCmd { select: 0, time: t, buttons: b, old_buttons: old, eye: [704.0, 132.0, -79.0], angles: [pitch, 0.0, 0.0] };
             ws.run_command(&lua.glua, &mut models, _ply, &cmd(21.0, 0, 0, -80.0));
             assert_eq!(nw_i(cannon, "__srcds_pc_effect"), 2, "ready");
             ws.run_command(&lua.glua, &mut models, _ply, &cmd(21.1, 1 << 11, 0, -80.0));

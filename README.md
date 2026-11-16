@@ -73,6 +73,44 @@ connect 192.168.0.10:27015
 For bug reports, run `cl_showerror 2` in the client console first; prediction errors then
 go to `garrysmod\console.log` (start GMod with `-condebug` to write that file).
 
+## Установка (кратко по-русски)
+
+1. **Что нужно:** Windows 10/11 x64; [Rust](https://rustup.rs) (stable); Visual Studio Build
+   Tools с компонентом «Разработка классических приложений на C++» (для сборки LuaJIT);
+   файлы выделенного сервера Garry's Mod через SteamCMD (они в репозиторий не входят,
+   srcds-rs их только читает):
+
+   ```
+   steamcmd +force_install_dir C:\gmodds +login anonymous +app_update 4020 validate +quit
+   ```
+
+2. **Сборка** (путь к репозиторию не должен содержать `!` — иначе не соберётся LuaJIT):
+
+   ```
+   git clone https://github.com/SMorganYu/srcds-rs.git
+   cd srcds-rs
+   cargo build --release -p srcds-server
+   ```
+
+   Готовый файл: `target\release\srcds-rs.exe`.
+
+3. **Запуск** — с LAN-адресом машины (не `127.0.0.1`: на loopback клиент GMod не заходит):
+
+   ```
+   target\release\srcds-rs.exe --ip 192.168.0.10 --port 27015 --game-dir C:\gmodds\garrysmod
+   ```
+
+   Остальные параметры: `srcds-rs.exe --help`. Остановить — `quit` или Ctrl+C. Порт в
+   интернет не открывать: аутентификации Steam пока нет.
+
+4. **Подключение:** в консоли Garry's Mod (`~`) — `connect 192.168.0.10:27015`. Для отчёта об
+   ошибках: запустить игру с `-condebug`, в консоли `cl_showerror 2`, после игры прислать
+   `garrysmod\console.log`.
+
+Состояние: ранний прототип. В игре подтверждены вход, sandbox, выбор оружия, руки,
+смерть/респаун; движение, пропы, физган, тулган, оружие HL2 и гравипушка реализованы, но с
+ошибками; звуков и декалей с сервера пока нет. Подробности — `docs/TEST_RESULTS.md`.
+
 ## Development
 
 * Tests: `cargo test --workspace`. The end-to-end sandbox tests run only when
